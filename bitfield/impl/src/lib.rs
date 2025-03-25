@@ -62,29 +62,21 @@ fn make_getter_token_stream(
         pub fn #getter_name(&self) -> #return_type {
             #size_check
             let mut offset_bits = #offset_bits_token_stream;
-            let mut offset_within_the_byte = offset_bits % 8;
-            let mut current_byte = offset_bits / 8;
-            let mut size_bits = #size_bits_token_stream as usize;
+            let mut remaining_bits_to_read = #size_bits_token_stream as usize;
+            let mut result = 0u128;
 
-            <#ty_ident as Specifier>::from_usize(if size_bits + offset_within_the_byte <= 8 {
-                let shiftr = (8 - offset_within_the_byte - size_bits) as u8;
-                let mask = ((1 << size_bits) - 1) as u8;
-                (self.data[current_byte] >> shiftr & mask) as usize
-            } else {
-                let mut result: u128 = 0;
-                while offset_within_the_byte + size_bits > 8 {
-                    let size_within_the_byte = 8 - offset_within_the_byte;
-                    let mask = ((1u16 << size_within_the_byte) - 1) as u8;
-                    result = (result.wrapping_shl(size_within_the_byte as u32)) | (self.data[current_byte] & mask) as u128;
-                    size_bits -= size_within_the_byte;
-                    offset_bits += size_within_the_byte;
-                    offset_within_the_byte = offset_bits % 8;
-                    current_byte = (offset_bits + 1) / 8;
-                }
-                let mask = ((1u16 << size_bits) - 1) as u8;
-                result = (result.wrapping_shl(size_bits as u32)) | ((self.data[current_byte] >> (8 - size_bits)) & mask) as u128;
-                result as usize
-            })
+            while remaining_bits_to_read > 0 {
+                let offset_within_the_byte = offset_bits % 8;
+                let current_byte = offset_bits / 8;
+                let bits_to_extract = (8 - offset_within_the_byte).min(remaining_bits_to_read);
+                let shiftr = 8 - offset_within_the_byte - bits_to_extract;
+                let mask = ((1 << bits_to_extract) - 1) as u8;
+                result = (result << bits_to_extract) | (((self.data[current_byte] >> shiftr) & mask) as u128) ;
+                remaining_bits_to_read -= bits_to_extract;
+                offset_bits += bits_to_extract;
+            }
+
+            <#ty_ident as Specifier>::from_usize(result as usize)
         }
     }
 }
@@ -101,34 +93,20 @@ fn make_setter_token_stream(
     quote! {
         pub fn #setter_name(&mut self, val: #arg_type) {
             let val = val as #uint_type;
-            let uint_size = <#uint_type>::BITS as usize;
             let mut offset_bits = #offset_bits_token_stream;
-            let mut offset_within_the_byte = offset_bits % 8;
-            let mut current_data_byte = offset_bits / 8;
-            let mut size_bits = #size_bits_token_stream as usize;
-            if size_bits + offset_within_the_byte <= 8 {
-                let shiftl = (8 - offset_within_the_byte - size_bits) as u8;
-                let mask = ((1 << size_bits) - 1) as u8;
-                let clear_mask = !(mask << shiftl);
-                self.data[current_data_byte] &= clear_mask;
-                self.data[current_data_byte] |=  (val as u8 & mask) << shiftl;
-            } else {
-                let mut bits_to_extract = 8 - offset_within_the_byte;
-                let mut offset_within_the_val = uint_size - size_bits;
-                while size_bits > 0 {
-                    let shift = uint_size - offset_within_the_val - bits_to_extract;
-                    let mask = (1 << bits_to_extract) - 1;
-                    let value = (val >> shift) & mask;
-                    let shiftl = 8 - offset_within_the_byte - bits_to_extract;
-                    self.data[current_data_byte] &= !(mask as u8);
-                    self.data[current_data_byte] |= ((value & mask) << shiftl) as u8;
-                    size_bits -= bits_to_extract;
-                    offset_within_the_val += bits_to_extract;
-                    offset_bits += bits_to_extract;
-                    current_data_byte = (offset_bits + 1) / 8;
-                    offset_within_the_byte = offset_bits % 8;
-                    bits_to_extract = (8 - offset_within_the_byte).min(size_bits) as usize;
-                }
+            let mut remaining_bits_to_write = #size_bits_token_stream as usize;
+
+            while remaining_bits_to_write > 0 {
+                let offset_within_the_byte = offset_bits % 8;
+                let current_byte = offset_bits / 8;
+                let bits_to_extract = (8 - offset_within_the_byte).min(remaining_bits_to_write);
+                let val_shiftr = remaining_bits_to_write - bits_to_extract;
+                let shiftl = 8 - offset_within_the_byte - bits_to_extract;
+                let mask = ((1 << bits_to_extract) - 1) as #uint_type;
+                self.data[current_byte] &= !(mask as u8);
+                self.data[current_byte] |= (((val >> val_shiftr) & mask) << shiftl) as u8;
+                offset_bits += bits_to_extract;
+                remaining_bits_to_write -= bits_to_extract;
             }
         }
     }
